@@ -1,19 +1,3 @@
-/*
-Copyright (c) 2019 StackRox Inc.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-   http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package main
 
 import (
@@ -91,6 +75,12 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 
 	admissionReviewResponse := v1beta1.AdmissionReview{
 		Response: &v1beta1.AdmissionResponse{
+			// Since the admission webhook now supports multiple API versions, we need
+			// to explicitly include the API version in the response.
+			// This API version needs to match the version from the request exactly, otherwise
+			// the API server will be unable to process the response.
+			// Note: a v1beta1 AdmissionReview is JSON-compatible with the v1 version, that's why
+			// we do not need to differentiate during unmarshalling or in the actual logic.
 			UID: admissionReviewReq.Request.UID,
 		},
 	}
@@ -131,6 +121,12 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 // serveAdmitFunc is a wrapper around doServeAdmitFunc that adds error handling and logging.
 func serveAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) {
 	log.Print("Handling webhook request ...")
+	log.Printf("Here is the raw request method: %v", r.Method)
+	log.Printf("Here is the raw request body: %v", r.Body)
+	log.Printf("Here is the raw request response: %v", r.Response)
+	log.Printf("Here is the raw request method: %v", r.Method)
+	// log ip of source of address
+	log.Printf("Here is the raw request remote address: %v", r.RemoteAddr)
 
 	var writeErr error
 	if bytes, err := doServeAdmitFunc(w, r, admit); err != nil {
