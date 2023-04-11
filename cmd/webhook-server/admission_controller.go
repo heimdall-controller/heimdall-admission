@@ -5,12 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
-	"k8s.io/api/admission/v1beta1"
+	"log"
+	"net/http"
+
+	admission "k8s.io/api/admission/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
-	"log"
-	"net/http"
 )
 
 const (
@@ -30,7 +31,7 @@ type patchOperation struct {
 
 // admitFunc is a callback for admission controller logic. Given an AdmissionRequest, it returns the sequence of patch
 // operations to be applied in case of success, or the error that will be shown when the operation is rejected.
-type admitFunc func(*v1beta1.AdmissionRequest) ([]patchOperation, error)
+type admitFunc func(*admission.AdmissionRequest) ([]patchOperation, error)
 
 // isKubeNamespace checks if the given namespace is a Kubernetes-owned namespace.
 func isKubeNamespace(ns string) bool {
@@ -61,7 +62,7 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 
 	// Step 2: Parse the AdmissionReview request.
 
-	var admissionReviewReq v1beta1.AdmissionReview
+	var admissionReviewReq admission.AdmissionReview
 
 	if _, _, err := universalDeserializer.Decode(body, nil, &admissionReviewReq); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -108,6 +109,12 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 		}
 		admissionReviewResponse.Response.Allowed = true
 		admissionReviewResponse.Response.Patch = patchBytes
+
+		// Announce that we are returning a JSON patch (note: this is the only
+		// patch type currently supported, but we have to explicitly announce
+		// it nonetheless).
+		admissionReviewResponse.Response.PatchType = new(admission.PatchType)
+		*admissionReviewResponse.Response.PatchType = admission.PatchTypeJSONPatch
 	}
 
 	// Return the AdmissionReview with a response as JSON.
