@@ -61,7 +61,17 @@ webhooks:
         path: "/mutate"
       caBundle: ${CA_PEM_B64}
     rules:
-      - operations: [ "CREATE" ]
-        apiGroups: [""]
-        apiVersions: ["v1"]
-        resources: ["pods"]
+      # Default rules to process updates to native K8s resources
+      - operations: [ "UPDATE" ]
+        apiGroups: [ "" ]
+        apiVersions: [ "v1" ]
+        resources: [ "pods" ]
+      - operations: [ "UPDATE" ]
+        apiGroups: [ "apps" ]
+        apiVersions: [ "v1" ]
+        resources: [ "deployments" ]
+      - operations: [ "UPDATE" ]
+        apiGroups: [ "apps" ]
+        apiVersions: [ "v1" ]
+        resources: [ "replicasets" ]
+
