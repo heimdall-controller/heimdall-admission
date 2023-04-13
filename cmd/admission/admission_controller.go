@@ -103,21 +103,26 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 	// Convert requestJson["request"].(map[string]interface{})["object"] to unstructured
 	objectJson := requestJson["request"].(map[string]interface{})["object"].(map[string]interface{})
 	unstructuredObject := &unstructured.Unstructured{Object: objectJson}
-	var ownerIP string
+	ownerIP := ""
 	if unstructuredObject.GetLabels()["app.heimdall.io/owner"] != "" {
 		ownerIP = unstructuredObject.GetLabels()["app.heimdall.io/owner"]
 
-		logrus.Infof("owner label: %s", ownerIP)
-		if ownerIP != strings.Split(r.RemoteAddr, ":")[0] {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return nil, fmt.Errorf("owner ip %s does not match request address %s", ownerIP, r.RemoteAddr)
-		} else {
-			logrus.Infof("owner ip %s matches request address %s", ownerIP, r.RemoteAddr)
-		}
+		//logrus.Infof("owner label: %s", ownerIP)
+		//if ownerIP != strings.Split(r.RemoteAddr, ":")[0] {
+		//	w.WriteHeader(http.StatusMethodNotAllowed)
+		//	return nil, fmt.Errorf("owner ip %s does not match request address %s", ownerIP, r.RemoteAddr)
+		//} else {
+		//	logrus.Infof("owner ip %s matches request address %s", ownerIP, r.RemoteAddr)
+		//}
 	}
 
 	senderIP := strings.Split(r.RemoteAddr, ":")[0]
 	logrus.Infof("sender ip: %s", senderIP)
+
+	if ownerIP == "" {
+		// allow the request if the owner label is not set
+		ownerIP = senderIP
+	}
 
 	// Step 3: Construct the AdmissionReview response.
 
@@ -136,8 +141,6 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 	if !isKubeNamespace(admissionReviewReq.Request.Namespace) {
 		patchOps, err = admit(admissionReviewReq.Request, senderIP, ownerIP)
 
-		logrus.Info("admit function called, continuing")
-
 		if err != nil {
 			admissionReviewResponse.Response.Allowed = false
 			admissionReviewResponse.Response.Result = &metav1.Status{
@@ -155,9 +158,11 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 			}
 			admissionReviewResponse.Response.Allowed = true
 			admissionReviewResponse.Response.Patch = patchBytes
-
+			admissionReviewResponse.Response.PatchType = new(v1beta1.PatchType)
+			*admissionReviewResponse.Response.PatchType = v1beta1.PatchTypeJSONPatch
 			logrus.Info("err is nil, so set response.Allowed to true, continuing")
 		}
+
 	}
 
 	// Return the AdmissionReview with a response as JSON.

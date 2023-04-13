@@ -1,43 +1,101 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/sirupsen/logrus"
 	"k8s.io/api/admission/v1beta1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"log"
 	"net/http"
 	"path/filepath"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"reflect"
 )
 
 const (
-	tlsDir      = `/run/secrets/tls`
-	tlsCertFile = `tls.crt`
-	tlsKeyFile  = `tls.key`
+	tlsDir        = `/run/secrets/tls`
+	tlsCertFile   = `tls.crt`
+	tlsKeyFile    = `tls.key`
+	ownerLabel    = `app.heimdall.io/owner`
+	priorityLabel = `app.heimdall.io/priority`
 )
 
-var (
-	podResource = metav1.GroupVersionResource{Version: "v1", Resource: "pods"}
-)
-
-// processResourceChanges implements the logic of our example admission controller webhook. For every pod that is created
-// (outside of Kubernetes namespaces), it first checks if `runAsNonRoot` is set. If it is not, it is set to a default
-// value of `false`. Furthermore, if `runAsUser` is not set (and `runAsNonRoot` was not initially set), it defaults
-// `runAsUser` to a value of 1234.
-//
-// To demonstrate how requests can be rejected, this webhook further validates that the `runAsNonRoot` setting does
-// not conflict with the `runAsUser` setting - i.e., if the former is set to `true`, the latter must not be `0`.
-// Note that we combine both the setting of defaults and the check for potential conflicts in one webhook; ideally,
-// the latter would be performed in a validating webhook admission controller.
 func processResourceChanges(req *v1beta1.AdmissionRequest, senderIP string, ownerIP string) ([]patchOperation, error) {
 	logrus.Infof("triggered admit function for resource %s", req.Name)
-	// check if the ips match, if they do then permit the request
-	if senderIP == ownerIP {
-		return nil, nil
-	} else {
-		return nil, errors.New("IPs do not match")
+
+	existingObj := &unstructured.Unstructured{}
+	newObj := &unstructured.Unstructured{}
+	if err := json.Unmarshal(req.OldObject.Raw, existingObj); err != nil {
+		logrus.Warnf("error decoding existing object: %v", err)
+		return nil, fmt.Errorf("error decoding existing object: %v", err)
 	}
+	if err := json.Unmarshal(req.Object.Raw, newObj); err != nil {
+		logrus.Warnf("error decoding new object: %v", err)
+		return nil, fmt.Errorf("error decoding new object: %v", err)
+	}
+
+	// Check if the objects are equal
+	if reflect.DeepEqual(existingObj.Object, newObj.Object) {
+		logrus.Infof("no changes detected, allowing request to go through")
+		return nil, nil
+	}
+
+	// Check if owner and sender IPs match
+	if senderIP == ownerIP {
+		logrus.Infof("owner IP and sender IP match, allowing request to go through")
+		return nil, nil
+	}
+
+	// Check if the specs have been changed
+	if !reflect.DeepEqual(existingObj.Object["spec"], newObj.Object["spec"]) {
+		logrus.Errorf("request denied because specs have been changed")
+		return nil, errors.New("request denied: specs have been changed")
+	}
+
+	// Check if any non-allowed labels have been changed
+	allowedLabels := map[string]bool{
+		"app.heimdall.io/owner":    true,
+		"app.heimdall.io/priority": true,
+	}
+	existingLabels := existingObj.GetLabels()
+	newLabels := newObj.GetLabels()
+	for k, v := range newLabels {
+		if _, ok := allowedLabels[k]; !ok && existingLabels[k] != v {
+			logrus.Errorf("request denied because of invalid label change: %s", k)
+			return nil, fmt.Errorf("request denied: changes are not allowed for label %s", k)
+		}
+	}
+
+	// Permit the request if all checks pass
+	logrus.Infof("request allowed")
+	return nil, nil
+}
+
+// getLabelDifferences returns three sets of label keys:
+// 1. Labels that have been added in the new object
+// 2. Labels that have been deleted in the new object
+// 3. Labels that have changed values in the new object
+func getLabelDifferences(existingLabels map[string]string, newLabels map[string]string) (map[string]string, map[string]string, map[string]string) {
+	addedLabels := make(map[string]string)
+	deletedLabels := make(map[string]string)
+	changedLabels := make(map[string]string)
+
+	for k, v := range newLabels {
+		if oldValue, ok := existingLabels[k]; !ok {
+			addedLabels[k] = v
+		} else if oldValue != v {
+			changedLabels[k] = v
+		}
+	}
+
+	for k, v := range existingLabels {
+		if _, ok := newLabels[k]; !ok {
+			deletedLabels[k] = v
+		}
+	}
+
+	return addedLabels, deletedLabels, changedLabels
 }
 
 func main() {
