@@ -54,8 +54,6 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 		return nil, fmt.Errorf("invalid method %s, only POST requests are allowed", r.Method)
 	}
 
-	logrus.Info("method is POST, continuing")
-
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		errs = append(errs, fmt.Sprintf("Could not read request body: %v", err))
@@ -63,15 +61,11 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 		return nil, fmt.Errorf("could not read request body: %v", err)
 	}
 
-	logrus.Info("body bytes processed, continuing")
-
 	if contentType := r.Header.Get("Content-Type"); contentType != jsonContentType {
 		errs = append(errs, fmt.Sprintf("unsupported content type %s, only %s is supported", contentType, jsonContentType))
 		w.WriteHeader(http.StatusBadRequest)
 		return nil, fmt.Errorf("unsupported content type %s, only %s is supported", contentType, jsonContentType)
 	}
-
-	logrus.Info("content type is json, continuing")
 
 	// Step 2: Parse the AdmissionReview request.
 
@@ -87,7 +81,6 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 		return nil, errors.New("malformed admission review: request is nil")
 	}
 
-	logrus.Info("admissionReviewReq processed, continuing")
 	r.Body = ioutil.NopCloser(bytes.NewReader(body))
 
 	// parse the request body into a json object
@@ -103,21 +96,26 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 	// Convert requestJson["request"].(map[string]interface{})["object"] to unstructured
 	objectJson := requestJson["request"].(map[string]interface{})["object"].(map[string]interface{})
 	unstructuredObject := &unstructured.Unstructured{Object: objectJson}
-	var ownerIP string
+	ownerIP := ""
 	if unstructuredObject.GetLabels()["app.heimdall.io/owner"] != "" {
 		ownerIP = unstructuredObject.GetLabels()["app.heimdall.io/owner"]
 
-		logrus.Infof("owner label: %s", ownerIP)
-		if ownerIP != strings.Split(r.RemoteAddr, ":")[0] {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return nil, fmt.Errorf("owner ip %s does not match request address %s", ownerIP, r.RemoteAddr)
-		} else {
-			logrus.Infof("owner ip %s matches request address %s", ownerIP, r.RemoteAddr)
-		}
+		//logrus.Infof("owner label: %s", ownerIP)
+		//if ownerIP != strings.Split(r.RemoteAddr, ":")[0] {
+		//	w.WriteHeader(http.StatusMethodNotAllowed)
+		//	return nil, fmt.Errorf("owner ip %s does not match request address %s", ownerIP, r.RemoteAddr)
+		//} else {
+		//	logrus.Infof("owner ip %s matches request address %s", ownerIP, r.RemoteAddr)
+		//}
 	}
 
 	senderIP := strings.Split(r.RemoteAddr, ":")[0]
 	logrus.Infof("sender ip: %s", senderIP)
+
+	if ownerIP == "" {
+		// allow the request if the owner label is not set
+		ownerIP = senderIP
+	}
 
 	// Step 3: Construct the AdmissionReview response.
 
@@ -128,23 +126,17 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 		},
 	}
 
-	logrus.Info("admissionReviewResponse constructed, continuing")
-
 	var patchOps []patchOperation
 	// Apply the admit() function only for non-Kubernetes namespaces. For objects in Kubernetes namespaces, return
 	// an empty set of patch operations.
 	if !isKubeNamespace(admissionReviewReq.Request.Namespace) {
 		patchOps, err = admit(admissionReviewReq.Request, senderIP, ownerIP)
 
-		logrus.Info("admit function called, continuing")
-
 		if err != nil {
 			admissionReviewResponse.Response.Allowed = false
 			admissionReviewResponse.Response.Result = &metav1.Status{
 				Message: err.Error(),
 			}
-
-			logrus.Info("err is not nil, so set response.Allowed to false, continuing")
 
 		} else {
 			// Otherwise, encode the patch operations to JSON and return a positive response.
@@ -155,9 +147,10 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 			}
 			admissionReviewResponse.Response.Allowed = true
 			admissionReviewResponse.Response.Patch = patchBytes
-
-			logrus.Info("err is nil, so set response.Allowed to true, continuing")
+			admissionReviewResponse.Response.PatchType = new(v1beta1.PatchType)
+			*admissionReviewResponse.Response.PatchType = v1beta1.PatchTypeJSONPatch
 		}
+
 	}
 
 	// Return the AdmissionReview with a response as JSON.
