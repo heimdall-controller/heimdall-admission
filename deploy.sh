@@ -9,11 +9,6 @@ keydir="$(mktemp -d)"
 echo "Generating TLS keys ..."
 "${basedir}/generate-keys.sh" "$keydir"
 
-# Create the `heimdall` namespace. This cannot be part of the YAML file as we first need to create the TLS secret,
-# which would fail otherwise.
-echo "Creating Kubernetes objects ..."
-kubectl create namespace heimdall
-
 # Create the TLS secret for the generated keys.
 kubectl -n heimdall create secret tls heimdall-admission-controller-tls \
     --cert "${keydir}/heimdall-admission-controller-tls.crt" \
