@@ -16,13 +16,13 @@
 
 .DEFAULT_GOAL := docker-image
 
-IMAGE ?= stackrox/admission-controller-webhook-demo:latest
+IMAGE ?= stackrox/admission-controller-heimdall:latest
 
-image/webhook-server: $(shell find . -name '*.go')
-	CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o $@ ./cmd/webhook-server
+image/heimdall-admission-controller: $(shell find . -name '*.go')
+	CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o $@ ./cmd/admission
 
 .PHONY: docker-image
-docker-image: image/webhook-server
+docker-image: image/heimdall-admission-controller
 	docker build -t $(IMAGE) image/
 
 .PHONY: push-image

@@ -28,23 +28,23 @@ For building the image, [GNU make](https://www.gnu.org/software/make/) and [Go](
 sure it is active (i.e., either via the configuration in the default location, or by setting
 the `KUBECONFIG` environment variable).
 2. Run `./deploy.sh`. This will create a CA, a certificate and private key for the webhook server,
-and deploy the resources in the newly created `webhook-demo` namespace in your Kubernetes cluster.
+and deploy the resources in the newly created `heimdall` namespace in your Kubernetes cluster.
 
 
 ## Verify
 
-1. The `webhook-server` pod in the `webhook-demo` namespace should be running:
+1. The `heimdall-admission-controller` pod in the `heimdall` namespace should be running:
 ```
-$ kubectl -n webhook-demo get pods
+$ kubectl -n heimdall get pods
 NAME                             READY     STATUS    RESTARTS   AGE
-webhook-server-6f976f7bf-hssc9   1/1       Running   0          35m
+heimdall-admission-controller-6f976f7bf-hssc9   1/1       Running   0          35m
 ```
 
-2. A `MutatingWebhookConfiguration` named `demo-webhook` should exist:
+2. A `MutatingWebhookConfiguration` named `heimdall-webhook` should exist:
 ```
 $ kubectl get mutatingwebhookconfigurations
 NAME           AGE
-demo-webhook   36m
+heimdall-webhook   36m
 ```
 
 3. Deploy [a pod](examples/pod-with-defaults.yaml) that neither sets `runAsNonRoot` nor `runAsUser`:
@@ -84,7 +84,7 @@ The admission controller should block the creation of that pod.
 ```
 $ kubectl create -f examples/pod-with-conflict.yaml 
 Error from server (InternalError): error when creating "examples/pod-with-conflict.yaml": Internal error
-occurred: admission webhook "webhook-server.webhook-demo.svc" denied the request: runAsNonRoot specified,
+occurred: admission webhook "heimdall-admission-controller.heimdall.svc" denied the request: runAsNonRoot specified,
 but runAsUser set to 0 (the root user)
 ```
 
