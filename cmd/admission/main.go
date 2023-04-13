@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"github.com/sirupsen/logrus"
 	"k8s.io/api/admission/v1beta1"
@@ -27,75 +26,46 @@ func processResourceChanges(req *v1beta1.AdmissionRequest, senderIP string, owne
 	existingObj := &unstructured.Unstructured{}
 	newObj := &unstructured.Unstructured{}
 	if err := json.Unmarshal(req.OldObject.Raw, existingObj); err != nil {
-		logrus.Warnf("error decoding existing object: %v", err)
-		return nil, fmt.Errorf("error decoding existing object: %v", err)
+		return nil, fmt.Errorf("ERROR: admision controller failed decoding existing object: %v", err)
 	}
 	if err := json.Unmarshal(req.Object.Raw, newObj); err != nil {
 		logrus.Warnf("error decoding new object: %v", err)
-		return nil, fmt.Errorf("error decoding new object: %v", err)
+		return nil, fmt.Errorf("ERROR: admission controller failed decoding new object: %v", err)
 	}
 
 	// Check if the objects are equal
 	if reflect.DeepEqual(existingObj.Object, newObj.Object) {
-		logrus.Infof("no changes detected, allowing request to go through")
+		logrus.Infof("ALLOWED: no changes detected, allowing request")
 		return nil, nil
 	}
 
 	// Check if owner and sender IPs match
 	if senderIP == ownerIP {
-		logrus.Infof("owner IP and sender IP match, allowing request to go through")
+		logrus.Infof("ALLOWED: owner IP %s matches sender IP %s", ownerIP, senderIP)
 		return nil, nil
 	}
 
 	// Check if the specs have been changed
 	if !reflect.DeepEqual(existingObj.Object["spec"], newObj.Object["spec"]) {
-		logrus.Errorf("request denied because specs have been changed")
-		return nil, errors.New("request denied: specs have been changed")
+		return nil, fmt.Errorf("DENIED: non-owner %s cannot change Spec", senderIP)
 	}
 
 	// Check if any non-allowed labels have been changed
 	allowedLabels := map[string]bool{
-		"app.heimdall.io/owner":    true,
-		"app.heimdall.io/priority": true,
+		ownerLabel:    true,
+		priorityLabel: true,
 	}
 	existingLabels := existingObj.GetLabels()
 	newLabels := newObj.GetLabels()
 	for k, v := range newLabels {
 		if _, ok := allowedLabels[k]; !ok && existingLabels[k] != v {
-			logrus.Errorf("request denied because of invalid label change: %s", k)
-			return nil, fmt.Errorf("request denied: changes are not allowed for label %s", k)
+			return nil, fmt.Errorf("DENIED: non-owner changes are not permitted non-Heimdall label (%s: %s)", k, v)
 		}
 	}
 
 	// Permit the request if all checks pass
-	logrus.Infof("request allowed")
+	logrus.Infof("ALLOWED: request from %s", senderIP)
 	return nil, nil
-}
-
-// getLabelDifferences returns three sets of label keys:
-// 1. Labels that have been added in the new object
-// 2. Labels that have been deleted in the new object
-// 3. Labels that have changed values in the new object
-func getLabelDifferences(existingLabels map[string]string, newLabels map[string]string) (map[string]string, map[string]string, map[string]string) {
-	addedLabels := make(map[string]string)
-	deletedLabels := make(map[string]string)
-	changedLabels := make(map[string]string)
-
-	for k, v := range newLabels {
-		if oldValue, ok := existingLabels[k]; !ok {
-			addedLabels[k] = v
-		} else if oldValue != v {
-			changedLabels[k] = v
-		}
-	}
-
-	for k, v := range existingLabels {
-		if _, ok := newLabels[k]; !ok {
-			deletedLabels[k] = v
-		}
-	}
-
-	return addedLabels, deletedLabels, changedLabels
 }
 
 func main() {
