@@ -1,4 +1,4 @@
 FROM scratch
 
-COPY ./webhook-server /
-ENTRYPOINT ["/webhook-server"]
+COPY ./heimdall-admission-controller /
+ENTRYPOINT ["/heimdall-admission-controller"]

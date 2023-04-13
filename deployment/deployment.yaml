@@ -1,19 +1,19 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: webhook-server
-  namespace: webhook-demo
+  name: heimdall-admission-controller
+  namespace: heimdall
   labels:
-    app: webhook-server
+    app: heimdall-admission-controller
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: webhook-server
+      app: heimdall-admission-controller
   template:
     metadata:
       labels:
-        app: webhook-server
+        app: heimdall-admission-controller
     spec:
       securityContext:
         runAsNonRoot: true
@@ -32,16 +32,16 @@ spec:
       volumes:
       - name: webhook-tls-certs
         secret:
-          secretName: webhook-server-tls
+          secretName: heimdall-admission-controller-tls
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: webhook-server
-  namespace: webhook-demo
+  name: heimdall-admission-controller
+  namespace: heimdall
 spec:
   selector:
-    app: webhook-server
+    app: heimdall-admission-controller
   ports:
     - port: 443
       targetPort: webhook-api
@@ -49,15 +49,15 @@ spec:
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
-  name: demo-webhook
+  name: heimdall-webhook
 webhooks:
-  - name: webhook-server.webhook-demo.svc
+  - name: heimdall-admission-controller.heimdall.svc
     sideEffects: None
     admissionReviewVersions: ["v1"]
     clientConfig:
       service:
-        name: webhook-server
-        namespace: webhook-demo
+        name: heimdall-admission-controller
+        namespace: heimdall
         path: "/mutate"
       caBundle: ${CA_PEM_B64}
     rules:

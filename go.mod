@@ -1,4 +1,4 @@
-module github.com/stackrox/admission-controller-webhook-demo
+module github.com/stackrox/admission-controller-heimdall
 
 go 1.16
 
