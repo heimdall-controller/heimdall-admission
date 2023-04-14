@@ -35,7 +35,7 @@ type patchOperation struct {
 
 // admitFunc is a callback for admission controller logic. Given an AdmissionRequest, it returns the sequence of patch
 // operations to be applied in case of success, or the error that will be shown when the operation is rejected.
-type admitFunc func(*v1beta1.AdmissionRequest, string, string) ([]patchOperation, error)
+type admitFunc func(*v1beta1.AdmissionRequest, string) ([]patchOperation, error)
 
 // isKubeNamespace checks if the given namespace is a Kubernetes-owned namespace.
 func isKubeNamespace(ns string) bool {
@@ -88,25 +88,20 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 	// Convert requestJson["request"].(map[string]interface{})["object"] to unstructured
 	objectJson := requestJson["request"].(map[string]interface{})["object"].(map[string]interface{})
 	unstructuredObject := &unstructured.Unstructured{Object: objectJson}
+
 	ownerIP := ""
 	if unstructuredObject.GetLabels()["app.heimdall.io/owner"] != "" {
 		ownerIP = unstructuredObject.GetLabels()["app.heimdall.io/owner"]
-
-		//logrus.Infof("owner label: %s", ownerIP)
-		//if ownerIP != strings.Split(r.RemoteAddr, ":")[0] {
-		//	w.WriteHeader(http.StatusMethodNotAllowed)
-		//	return nil, fmt.Errorf("owner ip %s does not match request address %s", ownerIP, r.RemoteAddr)
-		//} else {
-		//	logrus.Infof("owner ip %s matches request address %s", ownerIP, r.RemoteAddr)
-		//}
 	} else {
 		// cancel since this is not a heimdall object
 		w.WriteHeader(http.StatusAccepted)
 		return nil, nil
 	}
+	logrus.Infof("────────────────────────────────────────────────────────────")
+	logrus.Infof("processing new request for resource %s/%s", unstructuredObject.GetNamespace(), unstructuredObject.GetName())
 
 	senderIP := strings.Split(r.RemoteAddr, ":")[0]
-	logrus.Infof("sender ip: %s", senderIP)
+	logrus.Infof("request sender ip: %s", senderIP)
 
 	if ownerIP == "" {
 		// allow the request if the owner label is not set
@@ -126,7 +121,7 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 	// Apply the admit() function only for non-Kubernetes namespaces. For objects in Kubernetes namespaces, return
 	// an empty set of patch operations.
 	if !isKubeNamespace(admissionReviewReq.Request.Namespace) {
-		patchOps, err = admit(admissionReviewReq.Request, senderIP, ownerIP)
+		patchOps, err = admit(admissionReviewReq.Request, senderIP)
 
 		if err != nil {
 			admissionReviewResponse.Response.Allowed = false
@@ -155,7 +150,6 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 		return nil, fmt.Errorf("marshaling response: %v", err)
 	}
 
-	logrus.Info("response marshalled, returning bytes")
 	return bytes, nil
 }
 

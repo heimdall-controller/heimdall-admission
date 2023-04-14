@@ -26,19 +26,43 @@ const (
 	priorityLabel    = `app.heimdall.io/priority`
 	namespace        = "heimdall"
 	kafkaClusterName = "heimdall-kafka-cluster"
+	heimdallTopic    = "heimdall-topic"
 )
 
-func processResourceChanges(req *v1beta1.AdmissionRequest, senderIP string, ownerIP string) ([]patchOperation, error) {
-	logrus.Infof("triggered admit function for resource %s", req.Name)
+type ResourceDetails struct {
+	Name      string
+	Namespace string
+	Kind      string
+	Group     string
+	Version   string
+}
+
+func processResourceChanges(req *v1beta1.AdmissionRequest, senderIP string) ([]patchOperation, error) {
+	logrus.Infof("request is valid, validating contents of %s/%s", req.Namespace, req.Name)
+
+	resourceDetails := ResourceDetails{
+		Name:      req.Name,
+		Namespace: req.Namespace,
+		Kind:      req.Kind.Kind,
+		Group:     req.Kind.Group,
+		Version:   req.Kind.Version,
+	}
+
+	// Marshal the struct into a JSON string
+	resourceDetailsJSON, err := json.Marshal(resourceDetails)
+	if err != nil {
+		logrus.Errorf("ERROR: admission controller failed JSONifying Resource details: %v", err)
+		return nil, fmt.Errorf("ERROR: admision controller failed JSONifying Resource details: %v", err)
+	}
 
 	existingObj := &unstructured.Unstructured{}
 	newObj := &unstructured.Unstructured{}
 	if err := json.Unmarshal(req.OldObject.Raw, existingObj); err != nil {
-		queueResourceForReconcile(namespace, kafkaClusterName)
+		logrus.Errorf("ERROR: admission controller failed decoding existing object: %v", err)
 		return nil, fmt.Errorf("ERROR: admision controller failed decoding existing object: %v", err)
 	}
 	if err := json.Unmarshal(req.Object.Raw, newObj); err != nil {
-		queueResourceForReconcile(namespace, kafkaClusterName)
+		logrus.Errorf("ERROR: admission controller failed decoding new object: %v", err)
 		return nil, fmt.Errorf("ERROR: admission controller failed decoding new object: %v", err)
 	}
 
@@ -48,6 +72,8 @@ func processResourceChanges(req *v1beta1.AdmissionRequest, senderIP string, owne
 		return nil, nil
 	}
 
+	ownerIP := existingObj.GetLabels()[ownerLabel]
+
 	// Check if owner and sender IPs match
 	if senderIP == ownerIP {
 		logrus.Infof("ALLOWED: owner IP %s matches sender IP %s", ownerIP, senderIP)
@@ -56,7 +82,11 @@ func processResourceChanges(req *v1beta1.AdmissionRequest, senderIP string, owne
 
 	// Check if the specs have been changed
 	if !reflect.DeepEqual(existingObj.Object["spec"], newObj.Object["spec"]) {
-		queueResourceForReconcile(namespace, kafkaClusterName)
+		if err := queueResourceForReconcile(namespace, kafkaClusterName, resourceDetailsJSON); err != nil {
+			logrus.Warnf("ERROR: failed to queue resource for reconcile: %v", err)
+			return nil, fmt.Errorf("ERROR: failed to queue resource for reconcile: %v", err)
+		}
+		logrus.Warnf("DENIED: non-owner %s cannot change Spec, resource queued for Reconcile", senderIP)
 		return nil, fmt.Errorf("DENIED: non-owner %s cannot change Spec", senderIP)
 	}
 
@@ -69,13 +99,17 @@ func processResourceChanges(req *v1beta1.AdmissionRequest, senderIP string, owne
 	newLabels := newObj.GetLabels()
 	for k, v := range newLabels {
 		if _, ok := allowedLabels[k]; !ok && existingLabels[k] != v {
-			queueResourceForReconcile(namespace, kafkaClusterName)
-			return nil, fmt.Errorf("DENIED: non-owner changes are not permitted non-Heimdall label (%s: %s)", k, v)
+			if err := queueResourceForReconcile(namespace, kafkaClusterName, resourceDetailsJSON); err != nil {
+				logrus.Warnf("ERROR: failed to queue resource for reconcile: %v", err)
+				return nil, fmt.Errorf("ERROR: failed to queue resource for reconcile: %v", err)
+			}
+			logrus.Warnf("DENIED: non-owner %s cannot change non-Heimdall label (%s: %s), resource queued for Reconcile", senderIP, k, v)
+			return nil, fmt.Errorf("DENIED: non-owner changes are not permitted to non-Heimdall label (%s: %s)", k, v)
 		}
 	}
 
 	// Permit the request if all checks pass
-	logrus.Infof("ALLOWED: request from %s", senderIP)
+	logrus.Infof("ALLOWED: request from %s changed a Heimdall label", senderIP)
 	return nil, nil
 }
 
@@ -86,10 +120,8 @@ func createKafkaTopic(config kafka.Config, brokerList []string) error {
 	}
 	defer func() { _ = admin.Close() }()
 
-	topicName := "heimdall-topic"
-
 	// Check if topic already exists
-	topicMetadata, err := admin.DescribeTopics([]string{topicName})
+	topicMetadata, err := admin.DescribeTopics([]string{heimdallTopic})
 	if err == nil && len(topicMetadata) == 1 {
 		// Topic already exists
 		return nil
@@ -100,7 +132,7 @@ func createKafkaTopic(config kafka.Config, brokerList []string) error {
 		NumPartitions:     2,
 		ReplicationFactor: 1,
 	}
-	err = admin.CreateTopic(topicName, &topicDetails, false)
+	err = admin.CreateTopic(heimdallTopic, &topicDetails, false)
 	if err != nil {
 		return err
 	}
@@ -108,17 +140,15 @@ func createKafkaTopic(config kafka.Config, brokerList []string) error {
 	return nil
 }
 
-func queueResourceForReconcile(namespace string, kafkaClusterName string) {
+func queueResourceForReconcile(namespace string, kafkaClusterName string, resourceDetails []byte) error {
 	// Get Kafka broker list
 	brokerList, err := getBrokerList(namespace, kafkaClusterName)
 	if err != nil {
 		logrus.Errorf("failed to get broker list: %v", err)
-		return
+		return err
 	}
 
-	brokerList2 := []string{"10.99.72.78:9092"}
-
-	logrus.Infof("broker list: %v", brokerList)
+	logrus.Infof("retrieved Kafka broker address %s", brokerList[0])
 
 	// Set up Kafka producer config
 	config := kafka.NewConfig()
@@ -126,31 +156,32 @@ func queueResourceForReconcile(namespace string, kafkaClusterName string) {
 	config.Producer.Return.Errors = true
 
 	// Connect to Kafka broker
-	producer, err := kafka.NewSyncProducer(brokerList2, config)
+	producer, err := kafka.NewSyncProducer(brokerList, config)
 	if err != nil {
 		logrus.Errorf("failed to create Kafka producer: %v", err)
-		return
+		return err
 	}
 	defer producer.Close()
 
-	err = createKafkaTopic(*config, brokerList2)
+	err = createKafkaTopic(*config, brokerList)
 	if err != nil {
 		logrus.Errorf("failed to create Kafka topic: %v", err)
-		return
+		return err
 	}
 
 	// Publish a message to Kafka
 	message := &kafka.ProducerMessage{
-		Topic: "heimdall",
-		Value: kafka.StringEncoder("namespace/test-name"),
+		Topic: heimdallTopic,
+		Value: kafka.StringEncoder(resourceDetails),
 	}
 
-	logrus.Infof("message value: %v", message.Value)
-
 	_, _, err = producer.SendMessage(message)
+
 	if err != nil {
 		logrus.Errorf("failed to send message to Kafka: %v", err)
 	}
+
+	return nil
 }
 
 func getBrokerList(namespace string, kafkaClusterName string) ([]string, error) {
