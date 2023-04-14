@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"log"
 	"net/http"
+
 	"strings"
 )
 
@@ -41,14 +42,10 @@ func isKubeNamespace(ns string) bool {
 	return ns == metav1.NamespacePublic || ns == metav1.NamespaceSystem
 }
 
-var errs []string
-
 // doServeAdmitFunc parses the HTTP request for an admission controller webhook, and -- in case of a well-formed
 // request -- delegates the admission control logic to the given admitFunc. The response body is then returned as raw
 // bytes.
 func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) ([]byte, error) {
-	logrus.Infof("Processing %s request", r.Method)
-
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return nil, fmt.Errorf("invalid method %s, only POST requests are allowed", r.Method)
@@ -56,13 +53,11 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
-		errs = append(errs, fmt.Sprintf("Could not read request body: %v", err))
 		w.WriteHeader(http.StatusBadRequest)
 		return nil, fmt.Errorf("could not read request body: %v", err)
 	}
 
 	if contentType := r.Header.Get("Content-Type"); contentType != jsonContentType {
-		errs = append(errs, fmt.Sprintf("unsupported content type %s, only %s is supported", contentType, jsonContentType))
 		w.WriteHeader(http.StatusBadRequest)
 		return nil, fmt.Errorf("unsupported content type %s, only %s is supported", contentType, jsonContentType)
 	}
@@ -72,11 +67,9 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 	var admissionReviewReq v1beta1.AdmissionReview
 
 	if _, _, err := universalDeserializer.Decode(body, nil, &admissionReviewReq); err != nil {
-		errs = append(errs, fmt.Sprintf("could not deserialize request: %v", err))
 		w.WriteHeader(http.StatusBadRequest)
 		return nil, fmt.Errorf("could not deserialize request: %v", err)
 	} else if admissionReviewReq.Request == nil {
-		errs = append(errs, fmt.Sprintf("malformed admission review: request is nil"))
 		w.WriteHeader(http.StatusBadRequest)
 		return nil, errors.New("malformed admission review: request is nil")
 	}
@@ -91,7 +84,6 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 		logrus.Errorf("Error decoding request body: %v", err)
 		return nil, err
 	}
-	logrus.Info("The request body has been decoded")
 
 	// Convert requestJson["request"].(map[string]interface{})["object"] to unstructured
 	objectJson := requestJson["request"].(map[string]interface{})["object"].(map[string]interface{})
@@ -107,6 +99,10 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 		//} else {
 		//	logrus.Infof("owner ip %s matches request address %s", ownerIP, r.RemoteAddr)
 		//}
+	} else {
+		// cancel since this is not a heimdall object
+		w.WriteHeader(http.StatusAccepted)
+		return nil, nil
 	}
 
 	senderIP := strings.Split(r.RemoteAddr, ":")[0]
@@ -156,7 +152,6 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 	// Return the AdmissionReview with a response as JSON.
 	bytes, err := json.Marshal(&admissionReviewResponse)
 	if err != nil {
-		errs = append(errs, fmt.Sprintf("marshaling response: %v", err))
 		return nil, fmt.Errorf("marshaling response: %v", err)
 	}
 
@@ -168,14 +163,10 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 func serveAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) {
 	var writeErr error
 	if bytes, err := doServeAdmitFunc(w, r, admit); err != nil {
-		for i, err := range errs {
-			logrus.Errorf("Error no. %v handling webhook request: %v", i, err)
-		}
 		logrus.Errorf("Error handling webhook request: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		_, writeErr = w.Write([]byte(err.Error()))
 	} else {
-		log.Print("Webhook request handled successfully")
 		_, writeErr = w.Write(bytes)
 	}
 

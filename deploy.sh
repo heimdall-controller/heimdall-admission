@@ -22,4 +22,6 @@ sed -e 's@${CA_PEM_B64}@'"$ca_pem_b64"'@g' <"${basedir}/deployment.yaml" \
 
 rm -rf "$keydir"
 
+kubectl create -f "${basedir}/rbac.yaml"
+
 echo "The webhook server has been deployed and configured!"
