@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	kafka "github.com/Shopify/sarama"
+	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 	"k8s.io/api/admission/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,6 +31,7 @@ const (
 )
 
 type ResourceDetails struct {
+	MessageID uuid.UUID
 	Name      string
 	Namespace string
 	Kind      string
@@ -41,6 +43,7 @@ func processResourceChanges(req *v1beta1.AdmissionRequest, senderIP string) ([]p
 	logrus.Infof("request is valid, validating contents of %s/%s", req.Namespace, req.Name)
 
 	resourceDetails := ResourceDetails{
+		MessageID: uuid.New(),
 		Name:      req.Name,
 		Namespace: req.Namespace,
 		Kind:      req.Kind.Kind,
@@ -148,12 +151,13 @@ func queueResourceForReconcile(namespace string, kafkaClusterName string, resour
 		return err
 	}
 
-	logrus.Infof("retrieved Kafka broker address %s", brokerList[0])
+	logrus.Infof("retrieved Kafka broker address %s", brokerList)
 
 	// Set up Kafka producer config
 	config := kafka.NewConfig()
 	config.Producer.Return.Successes = true
 	config.Producer.Return.Errors = true
+	config.Producer.RequiredAcks = kafka.NoResponse
 
 	// Connect to Kafka broker
 	producer, err := kafka.NewSyncProducer(brokerList, config)
@@ -175,11 +179,13 @@ func queueResourceForReconcile(namespace string, kafkaClusterName string, resour
 		Value: kafka.StringEncoder(resourceDetails),
 	}
 
-	_, _, err = producer.SendMessage(message)
-
+	partition, offset, err := producer.SendMessage(message)
 	if err != nil {
 		logrus.Errorf("failed to send message to Kafka: %v", err)
+		return err
 	}
+
+	logrus.Infof("sent message to Kafka. Partition: %d, Offset: %d", partition, offset)
 
 	return nil
 }
@@ -190,6 +196,7 @@ func getBrokerList(namespace string, kafkaClusterName string) ([]string, error) 
 	if err != nil {
 		return nil, err
 	}
+
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, err
