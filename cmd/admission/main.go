@@ -40,8 +40,6 @@ type ResourceDetails struct {
 }
 
 func processResourceChanges(req *v1beta1.AdmissionRequest, senderIP string) ([]patchOperation, error) {
-	logrus.Infof("request is valid, validating contents of %s/%s", req.Namespace, req.Name)
-
 	resourceDetails := ResourceDetails{
 		MessageID: uuid.New(),
 		Name:      req.Name,
@@ -74,6 +72,12 @@ func processResourceChanges(req *v1beta1.AdmissionRequest, senderIP string) ([]p
 		logrus.Infof("ALLOWED: no changes detected, allowing request")
 		return nil, nil
 	}
+
+	if newObj.GetLabels()["app.heimdall.io/owner"] == "" {
+		return nil, nil
+	}
+
+	logrus.Infof("request is valid, validating contents of %s/%s", req.Namespace, req.Name)
 
 	ownerIP := existingObj.GetLabels()[ownerLabel]
 
