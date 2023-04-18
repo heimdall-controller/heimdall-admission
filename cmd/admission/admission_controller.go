@@ -87,30 +87,34 @@ func doServeAdmitFunc(w http.ResponseWriter, r *http.Request, admit admitFunc) (
 
 	// Convert requestJson["request"].(map[string]interface{})["object"] to unstructured
 	objectJson := requestJson["request"].(map[string]interface{})["object"].(map[string]interface{})
-	unstructuredObject := &unstructured.Unstructured{Object: objectJson}
+	newObject := &unstructured.Unstructured{Object: objectJson}
 
 	oldObjectJson := requestJson["request"].(map[string]interface{})["oldObject"].(map[string]interface{})
-	oldUnstructuredObject := &unstructured.Unstructured{Object: oldObjectJson}
+	oldObject := &unstructured.Unstructured{Object: oldObjectJson}
 
 	ownerIP := ""
-	if unstructuredObject.GetLabels()["app.heimdall.io/owner"] != "" {
-		ownerIP = unstructuredObject.GetLabels()["app.heimdall.io/owner"]
-	} else if oldUnstructuredObject.GetLabels()["app.heimdall.io/owner"] == "" && unstructuredObject.GetLabels()["app.heimdall.io/owner"] == "" {
-		w.WriteHeader(http.StatusOK)
-		return nil, nil
+	stopWatching := false
+	if newObject.GetLabels()["app.heimdall.io/owner"] != "" {
+		ownerIP = newObject.GetLabels()["app.heimdall.io/owner"]
+	} else if oldObject.GetLabels()["app.heimdall.io/owner"] != "" && newObject.GetLabels()["app.heimdall.io/owner"] == "" {
+		ownerIP = ""
+		stopWatching = true
 	} else {
-		w.WriteHeader(http.StatusOK)
+		// cancel since this is not a heimdall object
+		w.WriteHeader(http.StatusAccepted)
 		return nil, nil
 	}
 
 	// if owner = "", then either the object is not a heimdall object OR the label has been removed
 	// check for the latter first
 
-	logrus.Infof("────────────────────────────────────────────────────────────")
-	logrus.Infof("processing new request for resource %s/%s", unstructuredObject.GetNamespace(), unstructuredObject.GetName())
-
 	senderIP := strings.Split(r.RemoteAddr, ":")[0]
-	logrus.Infof("request sender ip: %s", senderIP)
+
+	if !stopWatching {
+		logrus.Infof("────────────────────────────────────────────────────────────")
+		logrus.Infof("processing new request for resource %s/%s", newObject.GetNamespace(), newObject.GetName())
+		logrus.Infof("request sender ip: %s", senderIP)
+	}
 
 	if ownerIP == "" {
 		// allow the request if the owner label is not set
